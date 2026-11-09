@@ -1,4 +1,4 @@
-# 2026-11-09 · 정역학 ④ 복합 단면 관성모멘트(T·I자) · 극관성모멘트·회전반경
+# 2026-11-09 · 정역학 ④ 복합 단면 관성모멘트(T·I자) · 극관성모멘트·회전반경 · Floor Field 구현 ① 격자·정적 필드·사람 배치
 
 > 편입 준비(최상위 계획) 역학. 경북대 자료조서·구술, 충남대 면접 대비. 교재는 Hibbeler Statics 14판 SI이며, 오늘 설명은 튜터 세션 내용으로 교재 본문과 대조하지 않았다.
 
@@ -48,3 +48,56 @@ kx = √(Ix/A) = √((π·r⁴/4) / (π·r²)) = r/2
 - 정역학 마무리: Hibbeler 복합 단면 교재 문제를 손으로 1시간 (비대칭 단면을 힌트 없이 처음부터 표로). 오늘 할지 11/10으로 옮길지 대기 중.
 - 비대칭 단면의 J를 평행축 정리와 함께 구하기.
 - 동역학 ① Hibbeler 12.1–12.3 직선 운동 (11/10).
+
+## 이어서 (21:55) · Floor Field 구현 ① 1~3단계
+
+> 편입 준비(최상위 계획) Floor Field 프로젝트 1단계(Python 셀 오토마톤). 코드는 직접 작성하고 단계별 안내·리뷰를 받았다. 레포 [naahad/floor-field-evacuation](https://github.com/naahad/floor-field-evacuation) 커밋 `67dafe3`(격자·정적 필드), `b533f63`(사람 배치).
+
+### 주제
+설계 노트 2~3절대로 방 격자 `make_room`, 정적 필드 `static_field`, 사람 무작위 배치 `place_people`를 만들고 확인값으로 검증했다. 한 스텝 갱신 규칙(4a~4d)은 11/10로 넘겼다.
+
+### 핵심 내용
+1. **벽까지 배열에 넣기**: 방 L×L에 벽 테두리를 붙여 (L+2)×(L+2). 이웃 칸(상하좌우)을 볼 때 배열 밖으로 나가지 않고, 벽은 walkable=False(ξ=0)로 자연스럽게 막힌다.
+2. **출구는 고정**: 재현 검증(논문 조건 그대로), 무작위성은 초기 배치·확률적 이동에 이미 있음, 로봇 위치 실험에서 비교 조건이 섞이지 않게. 출구 위치·개수는 나중에 별도 실험으로.
+3. **정적 필드 S = dmax − dist**: dist는 출구까지 유클리드 거리, dmax는 **방 칸 중에서** 최대 거리. walkable 자체가 bool 배열이라 그대로 마스크가 된다. 벽은 0.
+4. **별칭 vs 복사**: `b = a`는 같은 배열에 이름만 하나 더, `a.copy()`가 진짜 복사. 출구를 뺀 후보 마스크는 copy로 만들어야 원본 walkable이 안 바뀐다.
+5. **rng(난수 생성기)**: 시드가 같으면 같은 순서, 뽑을 때마다 상태가 넘어감. 함수는 바깥에서 받은 rng를 쓰고 **None일 때만** 새로 만든다 → 디버깅은 시드 고정, 표본 500회는 rng 하나를 계속 넘겨 매번 다른 배치.
+
+### 코드
+```python
+def static_field(walkable, door):
+    ii, jj = np.indices(walkable.shape)
+    i_d, j_d = door
+    dist = np.sqrt((ii-i_d)**2 + (jj-j_d)**2)
+    dmax = dist[walkable].max()
+    return np.where(walkable, dmax - dist, 0)
+
+def place_people(walkable, door, rho=0.3, rng=None):
+    roi = walkable.copy(); roi[door] = False
+    cells = np.argwhere(roi)                     # 후보 좌표 (K, 2)
+    if rng is None:
+        rng = np.random.default_rng()
+    pos = rng.choice(len(cells), size=round(rho * len(cells)), replace=False)
+    return cells[pos]                            # 번호 → 좌표 (N, 2)
+```
+
+확인값
+```txt
+make_room(63): (65, 65) 3970 (0, 32)
+static_field (L=63): S[door] = 70.21 (= √(63² + 31²)), 아래 두 모서리 0, 벽 0
+place_people (L=61, 시드 0): 1116명, 중복 없음, 전원 방 안, 출구에 없음
+같은 시드 → 같은 배치 True, rng 하나 공유 → 다른 배치 True, rng 생략 → (1116, 2)
+```
+
+### 막혔던 점과 해결
+- 정적 필드의 흐름을 못 잡음 → ① 행·열 번호 ② 거리 ③ 방 칸 중 최대 ④ dmax − dist의 4단계 표와 칸 하나 손계산으로 해결. numpy 연습 예시 `d = ii + jj`를 거리 식으로 가져온 것, 메모의 거리 식 부호(`-` → `+`)도 함께 고침.
+- 격자 크기 의문: 설계 노트 "63×63, ρ=0.3 → 1116명"은 방 61×61(3721칸 × 0.3)이어야 맞음 → 논문 63×63은 벽 포함으로 추정, 기본값 L=61로 바꿈. **논문 ② p.7 원문 확인은 11/10.**
+- `place_people`가 좌표가 아니라 번호를 반환 → `IndexError: too many indices` → `cells[idx]`로 해결.
+- rng 처리 3번 수정: 함수 안에서 `default_rng(0)`으로 덮어씀(항상 같은 배치) → 매번 새 기계(항상 다른 배치, 시드 무시) → `if rng is not None` 조건 반대(rng 생략 시 `AttributeError`) → `if rng is None`으로 해결. 확인값이 통과해도 이런 버그가 남을 수 있어 시드 테스트를 따로 돌림.
+- VS Code 터미널(PowerShell)에 Python 코드를 바로 붙여 넣어 `ParserError` → `python test.py`로 실행.
+- `git commit`을 `-m` 없이 실행해 Vim이 열림 → `Esc` → `:q!`로 빠져나와 `git commit -m "..."`.
+
+### 다음에 할 것 (11/10)
+- 논문 ② p.7에서 63×63이 벽 포함인지 확인 → 맞으면 설계 노트 2절 수정.
+- 4a `move_probs`: 한 사람의 5방향(제자리·상·하·좌·우) 이동 확률, 제자리는 n = 0. 확인값: 출구 바로 아래, 빈 방, k_S = 0.4 → `[0.206 0.307 0.138 0.175 0.175]`.
+- 4b 목표 칸 선택 → 4c 충돌 처리(μ = 0) → 4d 이동·출구 제거.
